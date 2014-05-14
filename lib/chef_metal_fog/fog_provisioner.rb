@@ -19,9 +19,9 @@ module ChefMetalFog
     include Chef::Mixin::ShellOut
 
     DEFAULT_OPTIONS = {
-      :create_timeout => 600,
-      :start_timeout => 600,
-      :ssh_timeout => 20
+        :create_timeout => 600,
+        :start_timeout => 600,
+        :ssh_timeout => 20
     }
 
     def self.inflate(node)
@@ -51,34 +51,34 @@ module ChefMetalFog
       @base_bootstrap_options = compute_options.delete(:base_bootstrap_options) || {}
 
       case compute_options[:provider]
-      when 'AWS'
-        aws_credentials = compute_options.delete(:aws_credentials)
-        if aws_credentials
-          @aws_credentials = aws_credentials
-        else
-          @aws_credentials = ChefMetal::AWSCredentials.new
-          @aws_credentials.load_default
-        end
-        compute_options[:aws_access_key_id] ||= @aws_credentials.default[:access_key_id]
-        compute_options[:aws_secret_access_key] ||= @aws_credentials.default[:secret_access_key]
-        # TODO actually find a key with the proper id
-        # TODO let the user specify credentials and provider profiles that we can use
-        if id && aws_login_info[0] != id
-          raise "Default AWS credentials point at AWS account #{aws_login_info[0]}, but inflating from URL #{id}"
-        end
-      when 'OpenStack'
-        openstack_credentials = compute_options.delete(:openstack_credentials)
-        if openstack_credentials
-          @openstack_credentials = openstack_credentials
-        else
-          @openstack_credentials = ChefMetal::OpenstackCredentials.new
-          @openstack_credentials.load_default
-        end
+        when 'AWS'
+          aws_credentials = compute_options.delete(:aws_credentials)
+          if aws_credentials
+            @aws_credentials = aws_credentials
+          else
+            @aws_credentials = ChefMetal::AWSCredentials.new
+            @aws_credentials.load_default
+          end
+          compute_options[:aws_access_key_id] ||= @aws_credentials.default[:access_key_id]
+          compute_options[:aws_secret_access_key] ||= @aws_credentials.default[:secret_access_key]
+          # TODO actually find a key with the proper id
+          # TODO let the user specify credentials and provider profiles that we can use
+          if id && aws_login_info[0] != id
+            raise "Default AWS credentials point at AWS account #{aws_login_info[0]}, but inflating from URL #{id}"
+          end
+        when 'OpenStack'
+          openstack_credentials = compute_options.delete(:openstack_credentials)
+          if openstack_credentials
+            @openstack_credentials = openstack_credentials
+          else
+            @openstack_credentials = ChefMetal::OpenstackCredentials.new
+            @openstack_credentials.load_default
+          end
 
-        compute_options[:openstack_username] ||= @openstack_credentials.default[:openstack_username]
-        compute_options[:openstack_api_key] ||= @openstack_credentials.default[:openstack_api_key]
-        compute_options[:openstack_auth_url] ||= @openstack_credentials.default[:openstack_auth_url]
-        compute_options[:openstack_tenant] ||= @openstack_credentials.default[:openstack_tenant]
+          compute_options[:openstack_username] ||= @openstack_credentials.default[:openstack_username]
+          compute_options[:openstack_api_key] ||= @openstack_credentials.default[:openstack_api_key]
+          compute_options[:openstack_auth_url] ||= @openstack_credentials.default[:openstack_auth_url]
+          compute_options[:openstack_tenant] ||= @openstack_credentials.default[:openstack_tenant]
       end
       @key_pairs = {}
       @base_bootstrap_options_for = {}
@@ -155,16 +155,16 @@ module ChefMetalFog
     def acquire_machine(action_handler, node)
       # Set up the modified node data
       creator = case compute_options[:provider]
-        when 'AWS'
-          aws_login_info[1]
-        when 'OpenStack'
-          compute_options[:openstack_username]
-      end
+                  when 'AWS'
+                    aws_login_info[1]
+                  when 'OpenStack'
+                    compute_options[:openstack_username]
+                end
 
       provisioner_output = node['normal']['provisioner_output'] || {
-        'provisioner_url' => provisioner_url,
-        'provisioner_version' => ChefMetalFog::VERSION,
-        'creator' => creator
+          'provisioner_url' => provisioner_url,
+          'provisioner_version' => ChefMetalFog::VERSION,
+          'creator' => creator
       }
 
       if provisioner_output['provisioner_url'] != provisioner_url
@@ -214,7 +214,15 @@ module ChefMetalFog
         bootstrap_options.each_pair { |key,value| description << "    #{key}: #{value.inspect}" }
         server = nil
         action_handler.perform_action description do
-          server = compute.servers.create(bootstrap_options)
+          if compute_options[:provider] == 'vsphere'
+            Chef::Log.info "name: #{bootstrap_options[:name]}"
+            Chef::Log.info "name: #{bootstrap_options[:datacenter]}"
+            Chef::Log.info "name: #{bootstrap_options[:template_path]}"
+            clone_results = compute.vm_clone(convert_to_strings(bootstrap_options))
+            server = compute.servers.get(clone_results['new_vm']['id'])
+          else
+            server = compute.servers.create(bootstrap_options)
+          end
           provisioner_output['server_id'] = server.id
           # Save quickly in case something goes wrong
           save_node(action_handler, node, action_handler.new_resource.chef_server)
@@ -244,7 +252,7 @@ module ChefMetalFog
           _self = self
           action_handler.perform_action "wait for machine #{node['name']} to boot" do
             server.wait_for(timeout - (Time.now - start_time)) do
-              if ready?
+              if ready? && (_self.compute_options[:provider] != 'vsphere' || tools_state != 'toolsNotRunning')
                 transport ||= _self.transport_for(server)
                 begin
                   transport.execute('pwd')
@@ -280,6 +288,16 @@ module ChefMetalFog
 
       # Create machine object for callers to use
       machine_for(node, server)
+    end
+
+    def convert_to_strings(objay)
+      if objay.kind_of?(Array)
+        objay.map { |v| convert_to_strings(v) }
+      elsif objay.kind_of?(Hash)
+        Hash[objay.map { |(k, v)| [k.to_s, convert_to_strings(v)] }]
+      else
+        objay
+      end
     end
 
     # Attach IP to machine from IP pool
@@ -345,15 +363,17 @@ module ChefMetalFog
 
     def provisioner_url
       provider_identifier = case compute_options[:provider]
-        when 'AWS'
-          aws_login_info[0]
-        when 'DigitalOcean'
-          compute_options[:digitalocean_client_id]
-        when 'OpenStack'
-          compute_options[:openstack_auth_url]
-        else
-          '???'
-      end
+                              when 'AWS'
+                                aws_login_info[0]
+                              when 'DigitalOcean'
+                                compute_options[:digitalocean_client_id]
+                              when 'OpenStack'
+                                compute_options[:openstack_auth_url]
+                              when 'vsphere'
+                                compute_options[:vsphere_server]
+                              else
+                                '???'
+                            end
       "fog:#{compute_options[:provider]}:#{provider_identifier}"
     end
 
@@ -382,10 +402,10 @@ module ChefMetalFog
       @aws_login_info ||= begin
         iam = Fog::AWS::IAM.new(:aws_access_key_id => compute_options[:aws_access_key_id], :aws_secret_access_key => compute_options[:aws_secret_access_key])
         arn = begin
-          # TODO it would be nice if Fog let you do this normally ...
+                # TODO it would be nice if Fog let you do this normally ...
           iam.send(:request, {
-            'Action'    => 'GetUser',
-            :parser     => Fog::Parsers::AWS::IAM::GetUser.new
+              'Action'    => 'GetUser',
+              :parser     => Fog::Parsers::AWS::IAM::GetUser.new
           }).body['User']['Arn']
         rescue Fog::AWS::IAM::Error
           # TODO Someone tell me there is a better way to find out your current
@@ -492,9 +512,9 @@ module ChefMetalFog
 # TODO create a user known hosts file
 #          :user_known_hosts_file => vagrant_ssh_config['UserKnownHostsFile'],
 #          :paranoid => true,
-        :auth_methods => [ 'publickey' ],
-        :keys_only => true,
-        :host_key_alias => "#{server.id}.#{compute_options[:provider]}"
+:auth_methods => [ 'publickey' ],
+:keys_only => true,
+:host_key_alias => "#{server.id}.#{compute_options[:provider]}"
       }
       if server.respond_to?(:private_key) && server.private_key
         result[:key_data] = [ server.private_key ]
@@ -524,11 +544,13 @@ module ChefMetalFog
       remote_host = nil
       if compute_options[:use_private_ip_for_ssh]
         remote_host = server.private_ip_address
-      elsif !server.public_ip_address
-        Chef::Log.warn("Server has no public ip address.  Using private ip '#{server.private_ip_address}'.  Set provisioner option 'use_private_ip_for_ssh' => true if this will always be the case ...")
-        remote_host = server.private_ip_address
       elsif server.public_ip_address
         remote_host = server.public_ip_address
+      elsif server.ipaddress
+        remote_host = server.ipaddress
+      elsif server.private_ip_address
+        Chef::Log.warn("Server has no public ip address.  Using private ip '#{server.private_ip_address}'.  Set provisioner option 'use_private_ip_for_ssh' => true if this will always be the case ...")
+        remote_host = server.private_ip_address
       else
         raise "Server #{server.id} has no private or public IP address!"
       end

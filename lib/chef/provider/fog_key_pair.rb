@@ -171,12 +171,14 @@ class Chef::Provider::FogKeyPair < Chef::Provider::LWRPBase
         current_resource.action :delete
       end
     else
-      current_key_pair = compute.key_pairs.get(new_resource.name)
-      if current_key_pair
-        @current_fingerprint = current_key_pair ? current_key_pair.fingerprint : nil
-      else
-        current_resource.action :delete
-      end
+        if compute.respond_to?(:key_pairs)
+          current_key_pair = compute.key_pairs.get(new_resource.name)
+        end
+        if current_key_pair
+          @current_fingerprint = current_key_pair ? current_key_pair.fingerprint : nil
+        else
+          current_resource.action :delete
+        end
     end
 
     if new_resource.private_key_path && ::File.exist?(new_resource.private_key_path)
