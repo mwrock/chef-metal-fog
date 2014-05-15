@@ -182,7 +182,7 @@ module ChefMetalFog
         if !server
           Chef::Log.warn "Machine #{node['name']} (#{provisioner_output['server_id']} on #{provisioner_url}) is not associated with the ec2 account.  Recreating ..."
           need_to_create = true
-        elsif %w(terminated archive).include?(server.state) # Can't come back from that
+        elsif server.respond_to?(:state) && %w(terminated archive).include?(server.state) # Can't come back from that
           Chef::Log.warn "Machine #{node['name']} (#{server.id} on #{provisioner_url}) is terminated.  Recreating ..."
           need_to_create = true
         else
@@ -215,11 +215,16 @@ module ChefMetalFog
         server = nil
         action_handler.perform_action description do
           if compute_options[:provider] == 'vsphere'
-            Chef::Log.info "name: #{bootstrap_options[:name]}"
-            Chef::Log.info "name: #{bootstrap_options[:datacenter]}"
-            Chef::Log.info "name: #{bootstrap_options[:template_path]}"
             clone_results = compute.vm_clone(convert_to_strings(bootstrap_options))
             server = compute.servers.get(clone_results['new_vm']['id'])
+            if(bootstrap_options[:additional_disk_size_gb])
+              volume_options = {
+                  'server_id' => server.id,
+                  'datastore' => bootstrap_options[:datastore],
+                  'size_gb' => bootstrap_options[:additional_disk_size_gb]
+              }
+              volume = compute.volumes.create(volume_options)
+            end
           else
             server = compute.servers.create(bootstrap_options)
           end
@@ -529,7 +534,11 @@ module ChefMetalFog
     end
 
     def create_ssh_transport(server)
-      ssh_options = ssh_options_for(server)
+      if compute_options[:ssh_password]
+        ssh_options = {:password => compute_options[:ssh_password]}
+      else
+        ssh_options = ssh_options_for(server)
+      end
       # If we're on AWS, the default is to use ubuntu, not root
       if compute_options[:provider] == 'AWS'
         username = compute_options[:ssh_username] || 'ubuntu'
